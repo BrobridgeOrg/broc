@@ -30,20 +30,39 @@ func NewBroc(conn *nats.Conn) *Broc {
 }
 
 func (broc *Broc) rootHandler(ctx *Context) (interface{}, error) {
-	ctx.meta["request"] = ctx.msg.Data
-	return ctx.Next()
+
+	fmt.Printf("  -> %s%s\n", broc.prefix, ctx.Get("method").(string))
+
+	// Trying to run next handler
+	resp, err := ctx.Next()
+	if err != nil {
+		fmt.Printf("  <- %s%s - Error: %v\n", broc.prefix, ctx.Get("method").(string), err)
+		return nil, err
+	}
+
+	return resp, nil
 }
 
-func (broc *Broc) handler(method string, m *nats.Msg) {
+func (broc *Broc) prepareContext(method string, m *nats.Msg) *Context {
 
 	handlers, _ := broc.methodHandlers[method]
-
-	ctx := NewContext()
+	ctx := NewContext(broc)
 	ctx.msg = m
 	ctx.handlers = append(broc.handlers, handlers...)
 	ctx.meta["method"] = method
 
-	data, err := handlers[0](ctx)
+	if m != nil {
+		ctx.meta["request"] = m.Data
+	}
+
+	return ctx
+}
+
+func (broc *Broc) handler(method string, m *nats.Msg) {
+
+	ctx := broc.prepareContext(method, m)
+
+	data, err := ctx.handlers[0](ctx)
 	if err != nil {
 		m.Nak()
 		return
@@ -55,6 +74,22 @@ func (broc *Broc) handler(method string, m *nats.Msg) {
 	}
 
 	m.Respond(data.([]byte))
+}
+
+func (broc *Broc) register(method string) error {
+
+	channel := fmt.Sprintf("%s%s", broc.prefix, method)
+
+	fmt.Printf("Registering %s\n", channel)
+
+	_, err := broc.conn.Subscribe(channel, func(m *nats.Msg) {
+		broc.handler(method, m)
+	})
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (broc *Broc) SetPrefix(prefix string) {
@@ -73,11 +108,7 @@ func (broc *Broc) Apply() error {
 
 	for method, _ := range broc.methodHandlers {
 
-		channel := fmt.Sprintf("%s%s", broc.prefix, method)
-
-		_, err := broc.conn.Subscribe(channel, func(m *nats.Msg) {
-			broc.handler(channel, m)
-		})
+		err := broc.register(method)
 		if err != nil {
 			return err
 		}

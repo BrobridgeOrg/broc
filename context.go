@@ -1,16 +1,22 @@
 package broc
 
-import "github.com/nats-io/nats.go"
+import (
+	"errors"
+
+	"github.com/nats-io/nats.go"
+)
 
 type Context struct {
+	broc     *Broc
 	msg      *nats.Msg
 	handlers []Handler
 	meta     map[string]interface{}
 	current  int
 }
 
-func NewContext() *Context {
+func NewContext(broc *Broc) *Context {
 	return &Context{
+		broc:    broc,
 		meta:    make(map[string]interface{}),
 		current: 0,
 	}
@@ -30,6 +36,11 @@ func (ctx *Context) GetMeta() map[string]interface{} {
 }
 
 func (ctx *Context) Next() (interface{}, error) {
+
 	ctx.current++
+	if ctx.current == len(ctx.handlers) {
+		return nil, errors.New("no more handlers")
+	}
+
 	return ctx.handlers[ctx.current](ctx)
 }
